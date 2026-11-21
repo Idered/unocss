@@ -1,4 +1,5 @@
 import type { UnocssPluginContext } from '@unocss/core'
+import type { FSWatcher } from 'chokidar'
 import fs from 'node:fs/promises'
 import { resolve } from 'node:path'
 import process from 'node:process'
@@ -31,12 +32,19 @@ export async function resolveFilesystemGlobs(globs: string[], bases: string[]): 
   return [...new Set(matched.flat())]
 }
 
+/**
+ * Extract the utilities of `content.inline` and `content.filesystem`. With
+ * `shouldWatch`, the `content.filesystem` files are also watched for changes.
+ *
+ * Returns a function that closes the file watcher, if one was opened.
+ */
 export async function setupContentExtractor(
   ctx: UnocssPluginContext,
   shouldWatch = false,
-) {
+): Promise<() => Promise<void>> {
   const { content } = await ctx.getConfig()
   const { extract, tasks, root, filter } = ctx
+  let watcher: FSWatcher | undefined
 
   // inline text
   if (content?.inline) {
@@ -69,7 +77,7 @@ export async function setupContentExtractor(
     if (shouldWatch) {
       const { watch } = await import('chokidar')
 
-      const watcher = watch(files, {
+      watcher = watch(files, {
         ignorePermissionErrors: true,
         ignored: path => path.split(/[\\/]/).includes('.git'),
         cwd: root,
@@ -88,5 +96,9 @@ export async function setupContentExtractor(
     for (let i = 0; i < files.length; i += BATCH_SIZE) {
       await Promise.all(files.slice(i, i + BATCH_SIZE).map(extractFile))
     }
+  }
+
+  return async () => {
+    await watcher?.close()
   }
 }

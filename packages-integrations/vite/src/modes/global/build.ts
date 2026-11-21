@@ -18,6 +18,8 @@ export function GlobalModeBuildPlugin(ctx: UnocssPluginContext<VitePluginConfig>
   const inlineModules = new Map<string, { id: string, layer: string }>()
   const resolveContexts = new Map<string, Rollup.PluginContext>()
   const unocssImporters = new Set<string>()
+  // The content each `buildStart` set up, by environment. In dev it holds a `content.filesystem` watcher.
+  const contentSetups = new WeakMap<object, ReturnType<typeof setupContentExtractor>[]>()
   let viteConfig: ResolvedConfig
 
   // use maps to differentiate multiple build. using outDir as key
@@ -192,7 +194,21 @@ export function GlobalModeBuildPlugin(ctx: UnocssPluginContext<VitePluginConfig>
         viteConfig = config
       },
       buildStart() {
-        tasks.push(setupContentExtractor(ctx, viteConfig.mode !== 'test' && viteConfig.command === 'serve'))
+        const setup = setupContentExtractor(ctx, viteConfig.mode !== 'test' && viteConfig.command === 'serve')
+        tasks.push(setup)
+        // Vite 5 has no environments: its servers share one list and close in
+        // the order they started, so `closeBundle` takes the oldest entry.
+        const key = this.environment ?? ctx
+        contentSetups.set(key, [...contentSetups.get(key) ?? [], setup])
+      },
+      // In dev, this runs when the server closes or restarts. It only closes
+      // what its own environment opened, because a restarted server can reuse
+      // this plugin and start before the previous server has closed.
+      async closeBundle() {
+        const setup = contentSetups.get(this.environment ?? ctx)?.shift()
+        // a failed setup is already reported through `tasks`
+        const closeWatcher = await setup?.catch(() => undefined)
+        await closeWatcher?.()
       },
     },
     {
